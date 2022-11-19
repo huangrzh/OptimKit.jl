@@ -25,8 +25,6 @@ function optimize(fg, x, alg::ConjugateGradient;
     numfg = 1
     innergg = inner(x, g, g)
     normgrad = sqrt(innergg)
-    fhistory = [f]
-    normgradhistory = [normgrad]
 
     # compute here once to define initial value of α in scale-invariant way
     Pg = precondition(x, g)
@@ -39,49 +37,49 @@ function optimize(fg, x, alg::ConjugateGradient;
         @info @sprintf("CG: initializing with f = %.12f, ‖∇f‖ = %.4e", f, normgrad)
     local xprev, gprev, Pgprev, ηprev
     while true
-        # compute new search direction
-        if precondition === _precondition
-            Pg = g
-        else
-            Pg = precondition(x, deepcopy(g))
-        end
-        η = scale!(deepcopy(Pg), -1)
-        if mod(numiter, alg.restart) == 0
-            β = zero(α)
-        else
-            β = oftype(α, let x = x
-                alg.flavor(g, gprev, Pg, Pgprev, ηprev, (η₁,η₂)->inner(x,η₁,η₂))
-            end)
-            η = add!(η, ηprev, β)
-        end
+        m_time = @elapsed begin
+            # compute new search direction
+            if precondition === _precondition
+                Pg = g
+            else
+                Pg = precondition(x, deepcopy(g))
+            end
+            η = scale!(deepcopy(Pg), -1)
+            if mod(numiter, alg.restart) == 0
+                β = zero(α)
+            else
+                β = oftype(α, let x = x
+                    alg.flavor(g, gprev, Pg, Pgprev, ηprev, (η₁,η₂)->inner(x,η₁,η₂))
+                end)
+                η = add!(η, ηprev, β)
+            end
 
-        # store current quantities as previous quantities
-        xprev = x
-        gprev = g
-        Pgprev = Pg
-        ηprev = η
+            # store current quantities as previous quantities
+            xprev = x
+            gprev = g
+            Pgprev = Pg
+            ηprev = η
 
-        # perform line search
-        _xlast[] = x # store result in global variables to debug linesearch failures
-        _glast[] = g
-        _dlast[] = η
-        x, f, g, ξ, α, nfg = alg.linesearch(fg, x, η, (f, g);
-            initialguess = α, retract = retract, inner = inner)
-        numfg += nfg
-        numiter += 1
-        x, f, g = finalize!(x, f, g, numiter)
-        innergg = inner(x, g, g)
-        normgrad = sqrt(innergg)
-        push!(fhistory, f)
-        push!(normgradhistory, normgrad)
+            # perform line search
+            _xlast[] = x # store result in global variables to debug linesearch failures
+            _glast[] = g
+            _dlast[] = η
+            x, f, g, ξ, α, nfg = alg.linesearch(fg, x, η, (f, g);
+                initialguess = α, retract = retract, inner = inner)
+            numfg += nfg
+            numiter += 1
+            x, f, g = finalize!(x, f, g, numiter)
+            innergg = inner(x, g, g)
+            normgrad = sqrt(innergg)
 
-        # check stopping criteria and print info
-        if normgrad <= alg.gradtol || numiter >= alg.maxiter
-            break
+            # check stopping criteria and print info
+            if normgrad <= alg.gradtol || numiter >= alg.maxiter
+                break
+            end
         end
         verbosity >= 2 &&
-            @info @sprintf("CG: iter %4d: f = %.12f, ‖∇f‖ = %.4e, α = %.2e, β = %.2e, nfg = %d",
-                            numiter, f, normgrad, α, β, nfg)
+            @info @sprintf("CG: iter %4d: f = %.12f, ‖∇f‖ = %.4e, α = %.2e, β = %.2e, nfg = %d,  time=%.2g",
+                            numiter, f, normgrad, α, β, nfg, m_time)
 
         # transport gprev, ηprev and vectors in Hessian approximation to x
         gprev = transport!(gprev, xprev, ηprev, α, x)
@@ -94,6 +92,7 @@ function optimize(fg, x, alg::ConjugateGradient;
 
         # increase α for next step
         α = 2*α
+        
     end
     if verbosity > 0
         if normgrad <= alg.gradtol
@@ -104,8 +103,7 @@ function optimize(fg, x, alg::ConjugateGradient;
                             f, normgrad)
         end
     end
-    history = [fhistory normgradhistory]
-    return x, f, g, numfg, history
+    return x, f, g, numfg
 end
 
 struct HagerZhang{T<:Real} <: CGFlavor
