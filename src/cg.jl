@@ -80,7 +80,7 @@ function optimize(fg, x, alg::ConjugateGradient;
         verbosity >= 2 &&
             @info @sprintf("CG: iter %4d: f = %.12f, ‖∇f‖ = %.4e, α = %.2e, β = %.2e, nfg = %d,  time=%.2g",
                             numiter, f, normgrad, α, β, nfg, m_time)
-
+        flush(STDOUT)
         # transport gprev, ηprev and vectors in Hessian approximation to x
         gprev = transport!(gprev, xprev, ηprev, α, x)
         if precondition === _precondition
