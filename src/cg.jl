@@ -80,30 +80,30 @@ function optimize(fg, x, alg::ConjugateGradient;
             if normgrad <= alg.gradtol || numiter >= alg.maxiter
                 break
             end
+            # transport gprev, ηprev and vectors in Hessian approximation to x
+            gprev = transport!(gprev, xprev, ηprev, α, x)
+            if precondition === _precondition
+                Pgprev = gprev
+            else
+                Pgprev = transport!(Pgprev, xprev, ηprev, α, x)
+            end
+            ηprev = transport!(deepcopy(ηprev), xprev, ηprev, α, x)
+
+            # increase α for next step
+            α = 2*α
+
         end
         verbosity >= 2 &&
             @info @sprintf("CG: iter %4d: f = %.12f, ‖∇f‖ = %.4e, α = %.2e, β = %.2e, nfg = %d,  time=%.2g",
                             numiter, f, normgrad, α, β, nfg, m_time)
         flush(stdout)
-        # transport gprev, ηprev and vectors in Hessian approximation to x
-        gprev = transport!(gprev, xprev, ηprev, α, x)
-        if precondition === _precondition
-            Pgprev = gprev
-        else
-            Pgprev = transport!(Pgprev, xprev, ηprev, α, x)
-        end
-        ηprev = transport!(deepcopy(ηprev), xprev, ηprev, α, x)
-
-        # increase α for next step
-        α = 2*α
-        
     end
     if verbosity > 0
         if normgrad <= alg.gradtol
-            @info @sprintf("CG: converged after %d iterations: f = %.12f, ‖∇f‖ = %.4e",
+            @info @sprintf("CG: converged after %d iterations: f = %.12e, ‖∇f‖ = %.4e",
                             numiter, f, normgrad)
         else
-            @warn @sprintf("CG: not converged to requested tol: f = %.12f, ‖∇f‖ = %.4e",
+            @warn @sprintf("CG: not converged to requested tol: f = %.12e, ‖∇f‖ = %.4e",
                             f, normgrad)
         end
     end
