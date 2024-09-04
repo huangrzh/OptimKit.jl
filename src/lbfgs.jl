@@ -34,107 +34,110 @@ function optimize(fg, x, alg::LBFGS;
     verbosity >= 2 &&
         @info @sprintf("LBFGS: initializing with f = %.12f, ‖∇f‖ = %.4e", f, normgrad)
 
-    while true
-        # compute new search direction
-        if length(H) > 0
-            Hg = let x = x
-                H(g, ξ->precondition(x, ξ), (ξ1, ξ2)->inner(x, ξ1, ξ2), add!, scale!)
-            end
-            η = scale!(Hg, -1)
-        else
-            Pg = precondition(x, deepcopy(g))
-            normPg = sqrt(inner(x, Pg, Pg))
-            η = scale!(Pg, -1/normPg) # initial guess: scale invariant
-        end
-
-        # store current quantities as previous quantities
-        xprev = x
-        gprev = g
-        ηprev = η
-
-        # perform line search
-        _xlast[] = x # store result in global variables to debug linesearch failures
-        _glast[] = g
-        _dlast[] = η
-        x, f, g, ξ, α, nfg = alg.linesearch(fg, x, η, (f, g);
-            initialguess = one(f), acceptfirst = alg.acceptfirst,
-            # for some reason, line search seems to converge to solution alpha = 2 in most cases if acceptfirst = false. If acceptfirst = true, the initial value of alpha can immediately be accepted. This typically leads to a more erratic convergence of normgrad, but to less function evaluations in the end.
-            retract = retract, inner = inner)
-        numfg += nfg
-        numiter += 1
-        x, f, g = finalize!(x, f, g, numiter)
-        innergg = inner(x, g, g)
-        normgrad = sqrt(innergg)
-        push!(fhistory, f)
-        push!(normgradhistory, normgrad)
-
-        # check stopping criteria and print info
-        if normgrad <= alg.gradtol || numiter >= alg.maxiter
-            break
-        end
-        verbosity >= 2 &&
-            @info @sprintf("LBFGS: iter %4d: f = %.12f, ‖∇f‖ = %.4e, α = %.2e, m = %d, nfg = %d",
-                            numiter, f, normgrad, α, length(H), nfg)
-
-        # transport gprev, ηprev and vectors in Hessian approximation to x
-        gprev = transport!(gprev, xprev, ηprev, α, x)
-        for k = 1:length(H)
-            @inbounds s, y, ρ = H[k]
-            s = transport!(s, xprev, ηprev, α, x)
-            y = transport!(y, xprev, ηprev, α, x)
-            # QUESTION:
-            # Do we need to recompute ρ = inv(inner(x, s, y)) if transport is not isometric?
-            H[k] = (s, y, ρ)
-        end
-        ηprev = transport!(deepcopy(ηprev), xprev, ηprev, α, x)
-
-        if isometrictransport
-            # TRICK TO ENSURE LOCKING CONDITION IN THE CONTEXT OF LBFGS
-            #-----------------------------------------------------------
-            # (see A BROYDEN CLASS OF QUASI-NEWTON METHODS FOR RIEMANNIAN OPTIMIZATION)
-            # define new isometric transport such that, applying it to transported ηprev,
-            # it returns a vector proportional to ξ but with the norm of ηprev
-            # still has norm normη because transport is isometric
-            normη = sqrt(inner(x, ηprev, ηprev))
-            normξ = sqrt(inner(x, ξ, ξ))
-            β = normη/normξ
-            if !(inner(x, ξ, ηprev) ≈ normξ * normη) # ξ and η are not parallel
-                ξ₁ = ηprev
-                ξ₂ = scale!(ξ, β)
-                ν₁ = add!(ξ₁, ξ₂, +1)
-                ν₂ = scale!(deepcopy(ξ₂), -2)
-                squarednormν₁ = inner(x, ν₁, ν₁)
-                squarednormν₂ = inner(x, ν₂, ν₂)
-                # apply Householder transforms to gprev, ηprev and vectors in H
-                gprev = add!(gprev, ν₁, -2*inner(x, ν₁, gprev)/squarednormν₁)
-                gprev = add!(gprev, ν₂, -2*inner(x, ν₂, gprev)/squarednormν₂)
-                for k = 1:length(H)
-                    @inbounds s, y, ρ = H[k]
-                    s = add!(s, ν₁, -2*inner(x, ν₁, s)/squarednormν₁)
-                    s = add!(s, ν₂, -2*inner(x, ν₂, s)/squarednormν₂)
-                    y = add!(y, ν₁, -2*inner(x, ν₁, y)/squarednormν₁)
-                    y = add!(y, ν₂, -2*inner(x, ν₂, y)/squarednormν₂)
-                    H[k] = (s, y, ρ)
+    while true 
+        m_time = @elapsed begin
+            # compute new search direction
+            if length(H) > 0
+                Hg = let x = x
+                    H(g, ξ->precondition(x, ξ), (ξ1, ξ2)->inner(x, ξ1, ξ2), add!, scale!)
                 end
-                ηprev = ξ₂
+                η = scale!(Hg, -1)
+            else
+                Pg = precondition(x, deepcopy(g))
+                normPg = sqrt(inner(x, Pg, Pg))
+                η = scale!(Pg, -1/normPg) # initial guess: scale invariant
             end
-        else
-            # use cautious update below; see "A Riemannian BFGS Method without
-            # Differentiated Retraction for Nonconvex Optimization Problems"
-            β = one(normgrad)
+
+            # store current quantities as previous quantities
+            xprev = x
+            gprev = g
+            ηprev = η
+
+            # perform line search
+            _xlast[] = x # store result in global variables to debug linesearch failures
+            _glast[] = g
+            _dlast[] = η
+            x, f, g, ξ, α, nfg = alg.linesearch(fg, x, η, (f, g);
+                initialguess = one(f), acceptfirst = alg.acceptfirst,
+                # for some reason, line search seems to converge to solution alpha = 2 in most cases if acceptfirst = false. If acceptfirst = true, the initial value of alpha can immediately be accepted. This typically leads to a more erratic convergence of normgrad, but to less function evaluations in the end.
+                retract = retract, inner = inner)
+            numfg += nfg
+            numiter += 1
+            x, f, g = finalize!(x, f, g, numiter)
+            innergg = inner(x, g, g)
+            normgrad = sqrt(innergg)
+            push!(fhistory, f)
+            push!(normgradhistory, normgrad)
+
+            # check stopping criteria and print info
+            if normgrad <= alg.gradtol || numiter >= alg.maxiter
+                break
+            end
+
+            # transport gprev, ηprev and vectors in Hessian approximation to x
+            gprev = transport!(gprev, xprev, ηprev, α, x)
+            for k = 1:length(H)
+                @inbounds s, y, ρ = H[k]
+                s = transport!(s, xprev, ηprev, α, x)
+                y = transport!(y, xprev, ηprev, α, x)
+                # QUESTION:
+                # Do we need to recompute ρ = inv(inner(x, s, y)) if transport is not isometric?
+                H[k] = (s, y, ρ)
+            end
+            ηprev = transport!(deepcopy(ηprev), xprev, ηprev, α, x)
+
+            if isometrictransport
+                # TRICK TO ENSURE LOCKING CONDITION IN THE CONTEXT OF LBFGS
+                #-----------------------------------------------------------
+                # (see A BROYDEN CLASS OF QUASI-NEWTON METHODS FOR RIEMANNIAN OPTIMIZATION)
+                # define new isometric transport such that, applying it to transported ηprev,
+                # it returns a vector proportional to ξ but with the norm of ηprev
+                # still has norm normη because transport is isometric
+                normη = sqrt(inner(x, ηprev, ηprev))
+                normξ = sqrt(inner(x, ξ, ξ))
+                β = normη/normξ
+                if !(inner(x, ξ, ηprev) ≈ normξ * normη) # ξ and η are not parallel
+                    ξ₁ = ηprev
+                    ξ₂ = scale!(ξ, β)
+                    ν₁ = add!(ξ₁, ξ₂, +1)
+                    ν₂ = scale!(deepcopy(ξ₂), -2)
+                    squarednormν₁ = inner(x, ν₁, ν₁)
+                    squarednormν₂ = inner(x, ν₂, ν₂)
+                    # apply Householder transforms to gprev, ηprev and vectors in H
+                    gprev = add!(gprev, ν₁, -2*inner(x, ν₁, gprev)/squarednormν₁)
+                    gprev = add!(gprev, ν₂, -2*inner(x, ν₂, gprev)/squarednormν₂)
+                    for k = 1:length(H)
+                        @inbounds s, y, ρ = H[k]
+                        s = add!(s, ν₁, -2*inner(x, ν₁, s)/squarednormν₁)
+                        s = add!(s, ν₂, -2*inner(x, ν₂, s)/squarednormν₂)
+                        y = add!(y, ν₁, -2*inner(x, ν₁, y)/squarednormν₁)
+                        y = add!(y, ν₂, -2*inner(x, ν₂, y)/squarednormν₂)
+                        H[k] = (s, y, ρ)
+                    end
+                    ηprev = ξ₂
+                end
+            else
+                # use cautious update below; see "A Riemannian BFGS Method without
+                # Differentiated Retraction for Nonconvex Optimization Problems"
+                β = one(normgrad)
+            end
+
+            # set up quantities for LBFGS update
+            y = add!(scale!(deepcopy(g), 1/β), gprev, -1)
+            s = scale!(ηprev, α)
+            innersy = inner(x, s, y)
+            innerss = inner(x, s, s)
+
+            if innersy/innerss > normgrad/10000
+                norms = sqrt(innerss)
+                ρ = innerss/innersy
+                push!(H, (scale!(s, 1/norms), scale!(y, 1/norms), ρ))
+            end
         end
 
-        # set up quantities for LBFGS update
-        y = add!(scale!(deepcopy(g), 1/β), gprev, -1)
-        s = scale!(ηprev, α)
-        innersy = inner(x, s, y)
-        innerss = inner(x, s, s)
-
-        if innersy/innerss > normgrad/10000
-            norms = sqrt(innerss)
-            ρ = innerss/innersy
-            push!(H, (scale!(s, 1/norms), scale!(y, 1/norms), ρ))
-        end
+        verbosity >= 2 &&
+            @info @sprintf("LBFGS: iter %4d: f = %.8e, ‖∇f‖ = %.4e, α = %.2e, m = %d, nfg = %d, t=%.2g",
+                            numiter, f, normgrad, α, length(H), nfg, m_time)
     end
     if verbosity > 0
         if normgrad <= alg.gradtol
